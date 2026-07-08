@@ -1,472 +1,695 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import {
-  Folder, File, FileText, Image as ImageIcon, Video, Music, MoreVertical,
-  Search, Plus, LayoutGrid, List, Star, Clock, Trash2, HardDrive,
-  Download, Share2, ChevronRight, ArrowUpCircle, ExternalLink, Menu,
-  X, Shield, Cloud, Terminal, Settings, LogOut, Info, Database, Upload,
-  Loader2
-} from "lucide-react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { api, formatSize, formatDate } from "@/lib/api";
 
-// ============ TYPES ============
+// ── Types ──
+interface UserInfo {
+  id: number; email: string; name: string;
+  storageUsed: number; storageLimit: number;
+}
+interface Folder { id: number; name: string; parentId: number | null; createdAt: string; }
 interface FileItem {
-  id: number;
-  name: string;
-  size: number;
-  type: string;
-  isStarred: boolean;
-  createdAt: string;
+  id: number; name: string; originalName: string; mimeType: string;
+  size: number; folderId: number | null; isPublic: boolean;
+  shareToken: string | null; downloadCount: number; createdAt: string;
 }
 
-interface FolderItem {
-  id: number;
-  name: string;
-  createdAt: string;
+// ── Icons ──
+function FileIcon({ mimeType, size = "md" }: { mimeType: string; size?: "sm" | "md" | "lg" }) {
+  const s = size === "sm" ? "text-lg" : size === "lg" ? "text-3xl" : "text-xl";
+  if (mimeType.startsWith("image/")) return <span className={s}>🖼️</span>;
+  if (mimeType.startsWith("video/")) return <span className={s}>🎬</span>;
+  if (mimeType.startsWith("audio/")) return <span className={s}>🎵</span>;
+  if (mimeType.includes("pdf")) return <span className={s}>📄</span>;
+  if (mimeType.includes("zip")||mimeType.includes("rar")||mimeType.includes("tar")||mimeType.includes("gzip")) return <span className={s}>📦</span>;
+  if (mimeType.includes("text")||mimeType.includes("javascript")||mimeType.includes("json")||mimeType.includes("html")) return <span className={s}>📝</span>;
+  if (mimeType.includes("spreadsheet")||mimeType.includes("excel")||mimeType.includes("csv")) return <span className={s}>📊</span>;
+  return <span className={s}>📎</span>;
 }
 
-// ============ UI COMPONENTS ============
-function SidebarItem({ icon: Icon, label, active = false, onClick }: { icon: any, label: string, active?: boolean, onClick?: () => void }) {
+// ── Auth Screen ──
+function AuthScreen({ onAuth }: { onAuth: (token: string, user: UserInfo) => void }) {
+  const [mode, setMode] = useState<"login" | "register">("login");
+  const [email, setEmail] = useState(""); const [password, setPassword] = useState("");
+  const [name, setName] = useState(""); const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault(); setError(""); setLoading(true);
+    try {
+      const data = mode === "login"
+        ? await api.login({ email, password })
+        : await api.register({ email, password, name });
+      localStorage.setItem("cloud_token", data.token);
+      onAuth(data.token, data.user);
+    } catch (err: any) { setError(err.message); }
+    finally { setLoading(false); }
+  };
+
   return (
-    <button
-      onClick={onClick}
-      className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${
-        active
-          ? "bg-blue-600 text-white shadow-lg shadow-blue-600/20"
-          : "text-gray-400 hover:text-white hover:bg-white/5"
-      }`}
-    >
-      <Icon className="w-4 h-4" />
-      {label}
-    </button>
+    <div className="min-h-screen bg-nebula flex items-center justify-center p-4">
+      {/* Floating orbs */}
+      <div className="fixed inset-0 pointer-events-none overflow-hidden">
+        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-purple-600/10 rounded-full blur-[120px]" />
+        <div className="absolute bottom-1/3 right-1/4 w-80 h-80 bg-cyan-500/8 rounded-full blur-[100px]" />
+        <div className="absolute top-1/2 left-1/2 w-64 h-64 bg-violet-500/8 rounded-full blur-[80px]" />
+      </div>
+
+      <div className="glass-card rounded-3xl p-8 w-full max-w-md relative z-10 animate-slide-up">
+        <div className="text-center mb-8">
+          <div className="text-6xl mb-4 animate-float">🌌</div>
+          <h1 className="text-3xl font-bold gradient-text">NebulaDrive</h1>
+          <p className="text-slate-400 text-sm mt-2">25 Go de stockage gratuit • Infiniment vôtre</p>
+        </div>
+
+        <div className="flex mb-6 bg-white/[0.03] rounded-xl p-1.5 border border-white/[0.04]">
+          <button onClick={() => { setMode("login"); setError(""); }}
+            className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-all duration-300 ${
+              mode === "login" ? "bg-white/10 text-white shadow-lg" : "text-slate-500 hover:text-slate-300"
+            }`}>Connexion</button>
+          <button onClick={() => { setMode("register"); setError(""); }}
+            className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-all duration-300 ${
+              mode === "register" ? "bg-white/10 text-white shadow-lg" : "text-slate-500 hover:text-slate-300"
+            }`}>Inscription</button>
+        </div>
+
+        {error && (
+          <div className="bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl p-3 text-sm mb-5 animate-fade-in">
+            ⚠️ {error}
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {mode === "register" && (
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1.5 uppercase tracking-wider">Nom</label>
+              <input type="text" value={name} onChange={(e) => setName(e.target.value)} required
+                className="input-nebula w-full px-4 py-3 rounded-xl text-sm text-white placeholder:text-slate-600"
+                placeholder="Votre nom complet" />
+            </div>
+          )}
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5 uppercase tracking-wider">Email</label>
+            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required
+              className="input-nebula w-full px-4 py-3 rounded-xl text-sm text-white placeholder:text-slate-600"
+              placeholder="vous@exemple.com" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5 uppercase tracking-wider">Mot de passe</label>
+            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={6}
+              className="input-nebula w-full px-4 py-3 rounded-xl text-sm text-white placeholder:text-slate-600"
+              placeholder="••••••••" />
+          </div>
+          <button type="submit" disabled={loading}
+            className="btn-primary w-full py-3 rounded-xl text-white font-semibold text-sm disabled:opacity-50 disabled:cursor-not-allowed">
+            {loading ? (
+              <span className="flex items-center justify-center gap-2">
+                <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                Chargement...
+              </span>
+            ) : mode === "login" ? "🚀 Se connecter" : "✨ Créer mon compte"}
+          </button>
+        </form>
+
+        <p className="text-center text-xs text-slate-600 mt-6">
+          🔒 Chiffrement de bout en bout • 25 Go gratuits
+        </p>
+      </div>
+    </div>
   );
 }
 
-function FileIcon({ type }: { type: string }) {
-  if (type.includes("image")) return <ImageIcon className="w-5 h-5 text-emerald-400" />;
-  if (type.includes("video")) return <Video className="w-5 h-5 text-purple-400" />;
-  if (type.includes("audio")) return <Music className="w-5 h-5 text-pink-400" />;
-  if (type.includes("pdf") || type.includes("text")) return <FileText className="w-5 h-5 text-blue-400" />;
-  return <File className="w-5 h-5 text-gray-400" />;
-}
-
-function formatSize(bytes: number) {
-  if (bytes === 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
-}
-
-// ============ MAIN COMPONENT ============
-export default function NebulaDrive() {
-  const [view, setView] = useState<"grid" | "list">("grid");
-  const [activeTab, setActiveTab] = useState("all");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [isDragging, setIsDragging] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState<{ name: string; progress: number } | null>(null);
-
-  // Mock data for demo
-  const [folders, setFolders] = useState<FolderItem[]>([
-    { id: 1, name: "Projets 2026", createdAt: "2026-07-01" },
-    { id: 2, name: "Photos Vacances", createdAt: "2026-06-15" },
-    { id: 3, name: "Documents PDF", createdAt: "2026-05-20" },
-  ]);
-
-  const [files, setFiles] = useState<FileItem[]>([
-    { id: 1, name: "Presentation_Nebula.pdf", size: 4500000, type: "application/pdf", isStarred: true, createdAt: "2026-07-08" },
-    { id: 2, name: "Hero_Section.png", size: 1200000, type: "image/png", isStarred: false, createdAt: "2026-07-08" },
-    { id: 3, name: "Background_Video.mp4", size: 85000000, type: "video/mp4", isStarred: true, createdAt: "2026-07-07" },
-    { id: 4, name: "Nebula_Auth.ts", size: 12000, type: "text/typescript", isStarred: false, createdAt: "2026-07-06" },
-  ]);
-
-  // Handle simulated upload
-  const simulateUpload = (name: string, size: number, type: string) => {
-    setUploadProgress({ name, progress: 0 });
-    let p = 0;
-    const interval = setInterval(() => {
-      p += Math.random() * 30;
-      if (p >= 100) {
-        clearInterval(interval);
-        setUploadProgress(null);
-        const newFile: FileItem = {
-          id: Date.now(),
-          name,
-          size,
-          type,
-          isStarred: false,
-          createdAt: new Date().toISOString().split('T')[0]
-        };
-        setFiles(prev => [newFile, ...prev]);
-      } else {
-        setUploadProgress({ name, progress: p });
-      }
-    }, 400);
-  };
-
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(true);
-  };
-
-  const handleDragLeave = () => {
-    setIsDragging(false);
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-    const item = e.dataTransfer.items[0];
-    if (item) {
-      const file = item.getAsFile();
-      if (file) {
-        simulateUpload(file.name, file.size, file.type);
-      }
-    }
-  };
-
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      simulateUpload(file.name, file.size, file.type);
-    }
-  };
-
-  const totalStorage = 200 * 1024 * 1024 * 1024; // 200 GB
-  const usedStorage = files.reduce((acc, file) => acc + file.size, 0) + (1.2 * 1024 * 1024 * 1024); // mock some extra
-  const usagePercent = (usedStorage / totalStorage) * 100;
-
+// ── Toast ──
+function Toast({ message, onClose }: { message: string; onClose: () => void }) {
+  useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, [onClose]);
   return (
-    <div className="flex h-screen bg-[#0a0e1a] text-white overflow-hidden">
-      {/* Mobile Sidebar Overlay */}
-      {!isSidebarOpen && (
-        <button
-          onClick={() => setIsSidebarOpen(true)}
-          className="lg:hidden fixed bottom-6 right-6 z-50 p-4 bg-blue-600 rounded-full shadow-xl"
-        >
-          <Menu className="w-6 h-6" />
-        </button>
-      )}
+    <div className="fixed top-4 right-4 z-50 glass-card rounded-xl px-5 py-3 text-sm text-white animate-slide-up shadow-2xl border border-white/10">
+      {message}
+    </div>
+  );
+}
 
-      {/* Sidebar */}
-      <aside
-        className={`fixed lg:relative z-40 w-72 h-full bg-[#0d111c] border-r border-white/5 transition-transform duration-300 ${
-          isSidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
-        }`}
-      >
-        <div className="flex flex-col h-full p-6">
-          <div className="flex items-center justify-between mb-10">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-emerald-500 flex items-center justify-center">
-                <Cloud className="w-6 h-6 text-white" />
-              </div>
-              <span className="text-xl font-black tracking-tight bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent">
-                Nebula Drive
-              </span>
-            </div>
-            <button onClick={() => setIsSidebarOpen(false)} className="lg:hidden p-2 text-gray-500 hover:text-white">
-              <X className="w-5 h-5" />
-            </button>
-          </div>
+// ── Modal ──
+function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in" onClick={onClose}>
+      <div className="glass-card rounded-2xl p-6 w-full max-w-md animate-slide-up" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-5">
+          <h2 className="font-bold text-lg text-white">{title}</h2>
+          <button onClick={onClose} className="text-slate-500 hover:text-white transition p-1">✕</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
 
-          <div className="relative group/new mb-8">
-            <button className="flex items-center justify-center gap-2 w-full py-3 px-4 bg-white text-black font-bold rounded-xl hover:bg-gray-200 transition-colors">
-              <Plus className="w-5 h-5" />
-              Nouveau
-            </button>
-            <div className="absolute top-full left-0 w-full mt-2 hidden group-hover/new:block z-50">
-              <div className="bg-[#161b22] border border-white/10 rounded-xl shadow-2xl overflow-hidden p-1">
-                <label className="flex items-center gap-3 px-4 py-2 text-sm text-gray-300 hover:bg-white/5 hover:text-white cursor-pointer rounded-lg transition-colors">
-                  <File className="w-4 h-4 text-blue-400" />
-                  <span>Fichier</span>
-                  <input type="file" className="hidden" onChange={handleFileSelect} />
-                </label>
-                <label className="flex items-center gap-3 px-4 py-2 text-sm text-gray-300 hover:bg-white/5 hover:text-white cursor-pointer rounded-lg transition-colors">
-                  <Folder className="w-4 h-4 text-emerald-400" />
-                  <span>Dossier</span>
-                  <input 
-                    type="file" 
-                    className="hidden" 
-                    // @ts-ignore
-                    webkitdirectory="" 
-                    directory="" 
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) simulateUpload("Nouveau dossier", 0, "folder");
-                    }} 
-                  />
-                </label>
-              </div>
-            </div>
-          </div>
+// ── Main App ──
+export default function Home() {
+  const [user, setUser] = useState<UserInfo | null>(null);
+  const [token, setToken] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
-          <nav className="flex-1 space-y-1">
-            <SidebarItem icon={HardDrive} label="Mes fichiers" active={activeTab === "all"} onClick={() => setActiveTab("all")} />
-            <SidebarItem icon={Star} label="Favoris" active={activeTab === "starred"} onClick={() => setActiveTab("starred")} />
-            <SidebarItem icon={Clock} label="Récents" active={activeTab === "recent"} onClick={() => setActiveTab("recent")} />
-            <SidebarItem icon={Trash2} label="Corbeille" active={activeTab === "trash"} onClick={() => setActiveTab("trash")} />
-            <div className="pt-8 pb-4">
-              <span className="px-4 text-[10px] font-bold uppercase tracking-widest text-gray-600">Guides</span>
-            </div>
-            <SidebarItem icon={Terminal} label="Config Oracle" onClick={() => window.location.hash = "deploy"} />
-            <SidebarItem icon={Database} label="Config Neon" onClick={() => window.location.href = "/neon"} />
-          </nav>
+  const [folders, setFolders] = useState<Folder[]>([]);
+  const [files, setFiles] = useState<FileItem[]>([]);
+  const [currentFolderId, setCurrentFolderId] = useState<number | null>(null);
+  const [folderPath, setFolderPath] = useState<Folder[]>([]);
+  const [search, setSearch] = useState("");
+  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
 
-          {/* Storage stats */}
-          <div className="mt-auto p-4 rounded-2xl bg-white/[0.03] border border-white/5">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs text-gray-400 font-medium">Stockage utilisé</span>
-              <span className="text-xs font-bold text-blue-400">{Math.round(usagePercent * 10) / 10}%</span>
-            </div>
-            <div className="h-1.5 bg-white/5 rounded-full overflow-hidden mb-3">
-              <div
-                className="h-full bg-gradient-to-r from-blue-500 to-emerald-500 rounded-full"
-                style={{ width: `${usagePercent}%` }}
-              />
-            </div>
-            <p className="text-[10px] text-gray-500">
-              {formatSize(usedStorage)} sur 200 Go
-            </p>
-            <button className="w-full mt-4 py-2 bg-white/5 hover:bg-white/10 text-xs font-bold rounded-lg border border-white/5 transition-colors">
-              Gérer le stockage
-            </button>
+  const [showNewFolder, setShowNewFolder] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
+  const [showShareModal, setShowShareModal] = useState<FileItem | null>(null);
+  const [previewFile, setPreviewFile] = useState<FileItem | null>(null);
+  const [toasts, setToasts] = useState<{ id: number; msg: string }[]>([]);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+
+  const addToast = (msg: string) => {
+    const id = Date.now();
+    setToasts((prev) => [...prev, { id, msg }]);
+  };
+
+  // Init
+  useEffect(() => {
+    const t = localStorage.getItem("cloud_token");
+    if (t) {
+      setToken(t);
+      api.me().then((d) => { setUser(d.user); setLoading(false); })
+        .catch(() => { localStorage.removeItem("cloud_token"); setLoading(false); });
+    } else { setLoading(false); }
+  }, []);
+
+  const loadData = useCallback(async () => {
+    if (!token) return;
+    try {
+      const [fRes, dRes] = await Promise.all([
+        api.getFolders(currentFolderId),
+        search ? api.getFiles({ search }) : api.getFiles({ folderId: currentFolderId }),
+      ]);
+      setFolders(fRes.folders);
+      setFiles(dRes.files);
+    } catch (e) {
+      console.error("Load error:", e);
+    }
+  }, [token, currentFolderId, search]);
+
+  useEffect(() => { loadData(); }, [loadData]);
+
+  // Global drag & drop handler to prevent browser from opening files
+  useEffect(() => {
+    if (!user) return;
+    const preventDefaults = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    const onDragEnter = (e: DragEvent) => {
+      preventDefaults(e);
+      if (e.dataTransfer?.types.includes("Files")) setDragOver(true);
+    };
+    const onDragLeave = (e: DragEvent) => {
+      preventDefaults(e);
+      // Only hide overlay if leaving the window
+      if (e.relatedTarget === null) setDragOver(false);
+    };
+    const onDrop = (e: DragEvent) => {
+      preventDefaults(e);
+      setDragOver(false);
+      if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+        handleUpload(e.dataTransfer.files);
+      }
+    };
+    window.addEventListener("dragenter", onDragEnter);
+    window.addEventListener("dragover", preventDefaults);
+    window.addEventListener("dragleave", onDragLeave);
+    window.addEventListener("drop", onDrop);
+    return () => {
+      window.removeEventListener("dragenter", onDragEnter);
+      window.removeEventListener("dragover", preventDefaults);
+      window.removeEventListener("dragleave", onDragLeave);
+      window.removeEventListener("drop", onDrop);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, currentFolderId]);
+
+  const refreshUser = async () => {
+    try { const d = await api.me(); setUser(d.user); } catch {}
+  };
+
+  const navigateTo = (folderId: number | null) => {
+    if (folderId === currentFolderId) return;
+    if (folderId === null) { setFolderPath([]); setCurrentFolderId(null); return; }
+    setCurrentFolderId(folderId);
+  };
+
+  const openFolder = (folder: Folder) => {
+    setFolderPath([...folderPath, folder]);
+    setCurrentFolderId(folder.id);
+  };
+
+  const navigateUp = () => {
+    if (folderPath.length === 0) return;
+    const np = folderPath.slice(0, -1);
+    setFolderPath(np);
+    setCurrentFolderId(np.length > 0 ? np[np.length - 1].id : null);
+  };
+
+  const createFolder = async () => {
+    if (!newFolderName.trim()) return;
+    try {
+      await api.createFolder({ name: newFolderName, parentId: currentFolderId });
+      setNewFolderName(""); setShowNewFolder(false); loadData();
+      addToast("📁 Dossier créé avec succès !");
+    } catch (err: any) { addToast("❌ " + err.message); }
+  };
+
+  const handleUpload = async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return;
+    console.log("📤 Uploading", fileList.length, "file(s)");
+    const formData = new FormData();
+    for (let i = 0; i < fileList.length; i++) {
+      console.log("  -", fileList[i].name, fileList[i].size, "bytes");
+      formData.append("files", fileList[i]);
+    }
+    if (currentFolderId) formData.append("folderId", currentFolderId.toString());
+    addToast(`⏳ Upload de ${fileList.length} fichier(s)...`);
+    try {
+      const res = await api.uploadFiles(formData);
+      console.log("✅ Upload success:", res);
+      loadData(); refreshUser();
+      addToast(`✅ ${fileList.length} fichier(s) uploadé(s) !`);
+    } catch (err: any) {
+      console.error("❌ Upload error:", err);
+      addToast("❌ " + err.message);
+    }
+  };
+
+  const deleteFile = async (f: FileItem) => {
+    if (!confirm(`Supprimer définitivement "${f.originalName}" ?`)) return;
+    try { await api.deleteFile(f.id); loadData(); refreshUser(); addToast("🗑️ Fichier supprimé"); }
+    catch (err: any) { addToast("❌ " + err.message); }
+  };
+
+  const deleteFolder = async (f: Folder) => {
+    if (!confirm(`Supprimer le dossier "${f.name}" et tout son contenu ? Cette action est irréversible.`)) return;
+    try { await api.deleteFolder(f.id); loadData(); refreshUser(); addToast("🗑️ Dossier supprimé"); }
+    catch (err: any) { addToast("❌ " + err.message); }
+  };
+
+  const toggleShare = async (f: FileItem) => {
+    try {
+      if (f.isPublic && f.shareToken) {
+        await api.unshareFile(f.id); loadData(); addToast("🔒 Lien de partage révoqué");
+      } else {
+        const res = await api.shareFile(f.id);
+        setShowShareModal(res.file); loadData();
+      }
+    } catch (err: any) { addToast("❌ " + err.message); }
+  };
+
+  const copyShareLink = (f: FileItem) => {
+    const url = `${window.location.origin}/share/${f.shareToken}`;
+    navigator.clipboard.writeText(url);
+    addToast("📋 Lien copié dans le presse-papier !");
+  };
+
+  const downloadFile = (f: FileItem) => {
+    const url = f.shareToken ? api.shareDownloadUrl(f.id, f.shareToken) : api.downloadUrl(f.id);
+    window.open(url, "_blank");
+  };
+
+  const logout = () => {
+    localStorage.removeItem("cloud_token");
+    setUser(null); setToken(null);
+  };
+
+  // Loading
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-nebula flex items-center justify-center">
+        <div className="text-center animate-float">
+          <div className="text-7xl mb-6">🌌</div>
+          <div className="flex items-center gap-2 text-slate-400">
+            <svg className="animate-spin h-5 w-5 text-purple-500" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+            Chargement de NebulaDrive...
           </div>
         </div>
-      </aside>
+      </div>
+    );
+  }
 
-      {/* Main Content */}
-      <main 
-        className={`flex-1 flex flex-col h-full relative overflow-hidden transition-all duration-300 ${isDragging ? "bg-blue-600/5 ring-4 ring-blue-600/20 ring-inset" : ""}`}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-      >
-        {/* Drag Overlay */}
-        {isDragging && (
-          <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-blue-600/10 backdrop-blur-sm pointer-events-none border-4 border-dashed border-blue-500/50 m-4 rounded-3xl">
-            <div className="w-20 h-20 rounded-full bg-blue-600 flex items-center justify-center mb-4 animate-bounce">
-              <Upload className="w-10 h-10 text-white" />
-            </div>
-            <h2 className="text-2xl font-bold">Déposez vos fichiers ici</h2>
-            <p className="text-blue-300">Nebula Drive s&apos;occupe du reste</p>
-          </div>
+  if (!user || !token) return <AuthScreen onAuth={(t, u) => { setToken(t); setUser(u); }} />;
+
+  const usagePercent = Math.min(100, (user.storageUsed / user.storageLimit) * 100);
+  const storageColor = usagePercent > 90 ? "from-red-500 to-red-400" : usagePercent > 70 ? "from-amber-500 to-yellow-400" : "from-cyan-400 via-purple-500 to-violet-500";
+
+  return (
+    <div className="min-h-screen bg-nebula flex flex-col">
+      {/* Floating orbs */}
+      <div className="fixed inset-0 pointer-events-none overflow-hidden">
+        <div className="absolute top-10 right-20 w-72 h-72 bg-purple-600/8 rounded-full blur-[100px]" />
+        <div className="absolute bottom-20 left-10 w-80 h-80 bg-cyan-500/6 rounded-full blur-[100px]" />
+      </div>
+
+      {/* Toasts */}
+      {toasts.map((t) => (
+        <Toast key={t.id} message={t.msg} onClose={() => setToasts((prev) => prev.filter((x) => x.id !== t.id))} />
+      ))}
+
+      {/* ── Sidebar ── */}
+      <div className="flex flex-1">
+        {/* Sidebar overlay mobile */}
+        {sidebarOpen && (
+          <div className="lg:hidden fixed inset-0 z-30 bg-black/60 backdrop-blur-sm" onClick={() => setSidebarOpen(false)} />
         )}
 
-        {/* Upload Progress Toast */}
-        {uploadProgress && (
-          <div className="fixed bottom-24 right-8 z-[60] w-72 bg-[#161b22] border border-white/10 rounded-2xl p-4 shadow-2xl animate-fade-in-up">
-            <div className="flex items-center gap-3 mb-3">
-              <div className="w-8 h-8 rounded-lg bg-blue-500/20 flex items-center justify-center animate-spin">
-                <Loader2 className="w-4 h-4 text-blue-400" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <h4 className="text-xs font-bold truncate">Envoi de {uploadProgress.name}</h4>
-                <p className="text-[10px] text-gray-500">{Math.round(uploadProgress.progress)}% terminé</p>
-              </div>
-            </div>
-            <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
-              <div 
-                className="h-full bg-blue-500 transition-all duration-300" 
-                style={{ width: `${uploadProgress.progress}%` }}
-              />
-            </div>
-          </div>
-        )}
-
-        {/* Header */}
-        <header className="h-20 flex items-center justify-between px-8 border-b border-white/5 bg-[#0a0e1a]/50 backdrop-blur-xl z-30">
-          <div className="flex-1 max-w-2xl">
-            <div className="relative group">
-              <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 group-focus-within:text-blue-400 transition-colors" />
-              <input
-                type="text"
-                placeholder="Rechercher dans Nebula Drive..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full bg-white/5 border border-white/5 rounded-xl pl-12 pr-4 py-2.5 text-sm focus:outline-none focus:border-blue-500/50 focus:ring-4 focus:ring-blue-500/10 transition-all"
-              />
-            </div>
+        <aside className={`fixed lg:static inset-y-0 left-0 z-40 w-64 glass-card border-r border-white/[0.04] flex flex-col transition-transform duration-300 ${sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0 lg:w-20"}`}>
+          {/* Logo */}
+          <div className="p-5 border-b border-white/[0.04] flex items-center gap-3">
+            <span className="text-2xl">🌌</span>
+            {sidebarOpen && <span className="font-bold text-lg gradient-text">NebulaDrive</span>}
           </div>
 
-          <div className="flex items-center gap-4">
-            <button className="p-2 text-gray-400 hover:text-white hover:bg-white/5 rounded-lg">
-              <Settings className="w-5 h-5" />
+          {/* Nav */}
+          <nav className="flex-1 p-3 space-y-1">
+            <button onClick={() => navigateTo(null)}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-all ${
+                currentFolderId === null ? "bg-white/10 text-white" : "text-slate-400 hover:text-white hover:bg-white/[0.04]"
+              }`}>
+              <span className="text-lg">🏠</span>
+              {sidebarOpen && <span>Racine</span>}
             </button>
-            <div className="w-px h-6 bg-white/10 mx-2" />
-            <div className="flex items-center gap-3">
-              <div className="text-right hidden sm:block">
-                <div className="text-sm font-bold">Utilisateur</div>
-                <div className="text-[10px] text-gray-500">nebula-pro@account</div>
+            <button onClick={() => fileInputRef.current?.click()}
+              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm text-slate-400 hover:text-white hover:bg-white/[0.04] transition-all">
+              <span className="text-lg">📤</span>
+              {sidebarOpen && <span>Upload</span>}
+            </button>
+            <button onClick={() => { setShowNewFolder(true); setSidebarOpen(true); }}
+              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm text-slate-400 hover:text-white hover:bg-white/[0.04] transition-all">
+              <span className="text-lg">📁</span>
+              {sidebarOpen && <span>Nouveau dossier</span>}
+            </button>
+            <button onClick={() => { setSearch(""); loadData(); }}
+              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm text-slate-400 hover:text-white hover:bg-white/[0.04] transition-all">
+              <span className="text-lg">🔄</span>
+              {sidebarOpen && <span>Actualiser</span>}
+            </button>
+          </nav>
+
+          {/* Storage */}
+          {sidebarOpen && (
+            <div className="p-4 border-t border-white/[0.04]">
+              <div className="flex items-center justify-between text-xs text-slate-500 mb-2">
+                <span>Stockage</span>
+                <span>{formatSize(user.storageUsed)} / {formatSize(user.storageLimit)}</span>
               </div>
-              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 border-2 border-white/10" />
+              <div className="storage-bar h-2">
+                <div className={`storage-bar-fill h-full bg-gradient-to-r ${storageColor}`} style={{ width: `${usagePercent}%` }} />
+              </div>
+              <p className="text-[10px] text-slate-600 mt-1.5">{Math.round(usagePercent)}% utilisé</p>
             </div>
-          </div>
-        </header>
+          )}
 
-        {/* Browser Area */}
-        <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
-          {/* Breadcrumbs & View Toggle */}
-          <div className="flex items-center justify-between mb-8">
-            <div className="flex items-center gap-2 text-sm">
-              <span className="text-gray-500 hover:text-white cursor-pointer transition-colors">Nebula Drive</span>
-              <ChevronRight className="w-4 h-4 text-gray-700" />
-              <span className="font-bold text-gray-200">Tous les fichiers</span>
+          {/* User */}
+          <div className="p-4 border-t border-white/[0.04] flex items-center gap-3">
+            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-cyan-400 flex items-center justify-center text-white text-xs font-bold">
+              {user.name.charAt(0).toUpperCase()}
             </div>
-            <div className="flex items-center bg-white/5 rounded-lg p-1">
-              <button
-                onClick={() => setView("grid")}
-                className={`p-1.5 rounded-md transition-all ${view === "grid" ? "bg-white/10 text-white shadow-sm" : "text-gray-500 hover:text-gray-300"}`}
-              >
-                <LayoutGrid className="w-4 h-4" />
-              </button>
-              <button
-                onClick={() => setView("list")}
-                className={`p-1.5 rounded-md transition-all ${view === "list" ? "bg-white/10 text-white shadow-sm" : "text-gray-500 hover:text-gray-300"}`}
-              >
-                <List className="w-4 h-4" />
-              </button>
-            </div>
+            {sidebarOpen && (
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-white truncate">{user.name}</p>
+                <p className="text-xs text-slate-500 truncate">{user.email}</p>
+              </div>
+            )}
+            <button onClick={logout} className="text-slate-500 hover:text-red-400 transition text-sm" title="Déconnexion">🚪</button>
           </div>
+        </aside>
 
-          {/* Folders Section */}
-          <div className="mb-10">
-            <h3 className="text-xs font-bold uppercase tracking-widest text-gray-600 mb-4 px-1">Dossiers</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-              {folders.map((folder) => (
-                <div
-                  key={folder.id}
-                  className="group bg-white/[0.03] border border-white/5 p-4 rounded-2xl hover:bg-white/[0.06] hover:border-blue-500/30 transition-all cursor-pointer"
-                >
-                  <div className="flex items-start justify-between">
-                    <div className="w-12 h-12 rounded-xl bg-blue-500/10 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
-                      <Folder className="w-6 h-6 text-blue-400" />
-                    </div>
-                    <button className="p-1 text-gray-600 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity">
-                      <MoreVertical className="w-4 h-4" />
-                    </button>
-                  </div>
-                  <h4 className="font-semibold text-gray-200 mb-1 truncate">{folder.name}</h4>
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] text-gray-500">{folder.createdAt}</span>
-                    <span className="text-[10px] font-bold text-blue-500/70">12 fichiers</span>
-                  </div>
-                </div>
+        {/* ── Main Content ── */}
+        <main className="flex-1 flex flex-col min-w-0">
+          {/* Top bar */}
+          <header className="glass-card border-b border-white/[0.04] px-4 lg:px-6 py-3 flex items-center gap-4">
+            <button onClick={() => setSidebarOpen(!sidebarOpen)}
+              className="text-slate-400 hover:text-white transition p-1 lg:hidden">☰</button>
+
+            {/* Breadcrumb */}
+            <nav className="flex items-center gap-1.5 text-sm flex-1 min-w-0 overflow-x-auto">
+              <button onClick={() => navigateTo(null)}
+                className="text-slate-400 hover:text-white transition whitespace-nowrap font-medium">
+                🏠 Racine
+              </button>
+              {folderPath.map((f, i) => (
+                <span key={f.id} className="flex items-center gap-1.5 whitespace-nowrap">
+                  <span className="text-slate-600">/</span>
+                  <button onClick={() => {
+                    const np = folderPath.slice(0, i + 1);
+                    setFolderPath(np);
+                    setCurrentFolderId(f.id);
+                  }} className="text-slate-300 hover:text-white transition font-medium">
+                    {f.name}
+                  </button>
+                </span>
               ))}
-              {/* Add folder button */}
-              <button className="border-2 border-dashed border-white/5 rounded-2xl p-4 flex flex-col items-center justify-center gap-2 text-gray-600 hover:text-gray-400 hover:border-white/10 transition-all group">
-                <Plus className="w-6 h-6 group-hover:scale-110 transition-transform" />
-                <span className="text-xs font-bold">Créer un dossier</span>
-              </button>
+            </nav>
+
+            {/* Search */}
+            <div className="relative hidden sm:block w-56 lg:w-72">
+              <input type="text" value={search} onChange={(e) => setSearch(e.target.value)}
+                placeholder="🔍 Rechercher..."
+                className="input-nebula w-full pl-4 pr-10 py-2 rounded-xl text-sm text-white placeholder:text-slate-500" />
+              {search && (
+                <button onClick={() => setSearch("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white text-xs">✕</button>
+              )}
             </div>
-          </div>
 
-          {/* Files Section */}
-          <div>
-            <h3 className="text-xs font-bold uppercase tracking-widest text-gray-600 mb-4 px-1">Fichiers récents</h3>
+            {/* View toggle */}
+            <div className="hidden sm:flex bg-white/[0.03] rounded-lg p-1 border border-white/[0.04]">
+              <button onClick={() => setViewMode("grid")}
+                className={`px-2.5 py-1.5 rounded text-xs transition ${viewMode === "grid" ? "bg-white/10 text-white" : "text-slate-500"}`}>▦</button>
+              <button onClick={() => setViewMode("list")}
+                className={`px-2.5 py-1.5 rounded text-xs transition ${viewMode === "list" ? "bg-white/10 text-white" : "text-slate-500"}`}>☰</button>
+            </div>
 
-            {view === "grid" ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                {files.map((file) => (
-                  <div
-                    key={file.id}
-                    className="group relative bg-white/[0.02] border border-white/[0.04] rounded-2xl overflow-hidden hover:bg-white/[0.06] hover:border-blue-500/30 transition-all"
-                  >
-                    {/* Preview (Mock) */}
-                    <div className="h-32 bg-white/[0.02] flex items-center justify-center relative overflow-hidden">
-                      <FileIcon type={file.type} />
-                      <div className="absolute inset-0 bg-blue-600/0 group-hover:bg-blue-600/10 transition-colors" />
-                    </div>
-
-                    {/* Content */}
-                    <div className="p-4">
-                      <div className="flex items-start justify-between mb-2">
-                        <div className="flex-1 min-w-0">
-                          <h4 className="font-semibold text-gray-200 text-sm truncate">{file.name}</h4>
-                          <p className="text-[10px] text-gray-500">{formatSize(file.size)} • {file.createdAt}</p>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          {file.isStarred && <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />}
-                          <button className="p-1 text-gray-600 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity">
-                            <MoreVertical className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </div>
-                      <div className="flex gap-2 pt-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button className="flex-1 py-1.5 bg-blue-600 hover:bg-blue-500 text-[10px] font-bold rounded-lg transition-colors flex items-center justify-center gap-1">
-                          <Download className="w-3 h-3" /> Télécharger
-                        </button>
-                        <button className="p-1.5 bg-white/5 hover:bg-white/10 rounded-lg transition-colors border border-white/5">
-                          <Share2 className="w-3.5 h-3.5 text-gray-400" />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
+            {/* Mobile storage */}
+            <div className="sm:hidden w-16">
+              <div className="storage-bar h-1.5">
+                <div className={`storage-bar-fill h-full bg-gradient-to-r ${storageColor}`} style={{ width: `${usagePercent}%` }} />
               </div>
-            ) : (
-              <div className="bg-white/[0.02] rounded-2xl border border-white/5 overflow-hidden">
-                <table className="w-full text-left text-sm">
-                  <thead className="bg-white/5 text-gray-500 font-bold uppercase text-[10px] tracking-widest">
-                    <tr>
-                      <th className="px-6 py-4">Nom</th>
-                      <th className="px-6 py-4">Taille</th>
-                      <th className="px-6 py-4">Modifié le</th>
-                      <th className="px-6 py-4 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-white/[0.05]">
-                    {files.map((file) => (
-                      <tr key={file.id} className="group hover:bg-white/[0.04] transition-colors">
-                        <td className="px-6 py-4">
-                          <div className="flex items-center gap-3">
-                            <FileIcon type={file.type} />
-                            <span className="font-medium text-gray-200">{file.name}</span>
-                            {file.isStarred && <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />}
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 text-gray-500">{formatSize(file.size)}</td>
-                        <td className="px-6 py-4 text-gray-500">{file.createdAt}</td>
-                        <td className="px-6 py-4 text-right">
-                          <div className="flex items-center justify-end gap-2">
-                            <button className="p-2 text-gray-600 hover:text-white hover:bg-white/10 rounded-lg">
-                              <Download className="w-4 h-4" />
-                            </button>
-                            <button className="p-2 text-gray-600 hover:text-white hover:bg-white/10 rounded-lg">
-                              <Share2 className="w-4 h-4" />
-                            </button>
-                            <button className="p-2 text-gray-600 hover:text-white hover:bg-white/10 rounded-lg">
-                              <MoreVertical className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
+            </div>
+          </header>
+
+          {/* Drop zone */}
+          <div
+            className={`flex-1 p-4 lg:p-6 overflow-auto transition-colors ${dragOver ? "bg-purple-500/5" : ""}`}
+            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => { e.preventDefault(); setDragOver(false); handleUpload(e.dataTransfer.files); }}
+          >
+            <input ref={fileInputRef} type="file" multiple className="hidden"
+              onChange={(e) => handleUpload(e.target.files)} />
+
+            {/* Drag overlay */}
+            {dragOver && (
+              <div className="absolute inset-0 z-20 flex items-center justify-center bg-purple-500/10 backdrop-blur-sm rounded-2xl border-2 border-dashed border-purple-500/50 m-4 lg:m-6">
+                <div className="text-center animate-float">
+                  <div className="text-6xl mb-4">📤</div>
+                  <p className="text-xl font-bold text-white">Déposez vos fichiers ici</p>
+                  <p className="text-slate-400 text-sm mt-1">Relâchez pour uploader</p>
+                </div>
+              </div>
+            )}
+
+            {/* Empty state */}
+            {folders.length === 0 && files.length === 0 && !search && (
+              <div className="flex flex-col items-center justify-center py-32 text-center animate-slide-up">
+                <div className="text-7xl mb-6 animate-float">🌌</div>
+                <h2 className="text-2xl font-bold text-white mb-2">Votre espace est vide</h2>
+                <p className="text-slate-400 max-w-md">
+                  Glissez-déposez vos fichiers ici, ou utilisez le bouton Upload pour commencer.
+                  Vous disposez de <span className="text-purple-400 font-semibold">25 Go</span> gratuits.
+                </p>
+                <button onClick={() => fileInputRef.current?.click()}
+                  className="btn-primary mt-6 px-6 py-3 rounded-xl text-white font-semibold text-sm">
+                  📤 Uploader mes premiers fichiers
+                </button>
+              </div>
+            )}
+
+            {folders.length === 0 && files.length === 0 && search && (
+              <div className="flex flex-col items-center justify-center py-32 text-center">
+                <div className="text-6xl mb-4">🔍</div>
+                <p className="text-xl text-slate-400">Aucun résultat pour &quot;{search}&quot;</p>
+              </div>
+            )}
+
+            {/* Folders */}
+            {folders.length > 0 && (
+              <div className="mb-8">
+                <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-4">📁 Dossiers</h2>
+                {viewMode === "grid" ? (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+                    {folders.map((f) => (
+                      <div key={f.id}
+                        className="glass-card glass-card-hover rounded-2xl p-4 cursor-pointer flex flex-col items-center text-center relative group"
+                        onDoubleClick={() => openFolder(f)}
+                      >
+                        <div className="text-4xl mb-3">📁</div>
+                        <p className="text-sm font-medium text-slate-200 truncate w-full" title={f.name}>{f.name}</p>
+                        <p className="text-[10px] text-slate-600 mt-1">{formatDate(f.createdAt)}</p>
+                        <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-all duration-200">
+                          <button onClick={(e) => { e.stopPropagation(); deleteFolder(f); }}
+                            className="p-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/30 text-red-400 text-xs transition"
+                            title="Supprimer">🗑️</button>
+                        </div>
+                      </div>
                     ))}
-                  </tbody>
-                </table>
+                  </div>
+                ) : (
+                  <div className="glass-card rounded-2xl overflow-hidden">
+                    {folders.map((f) => (
+                      <div key={f.id} className="table-row-nebula flex items-center px-4 py-3 gap-3 cursor-pointer hover:bg-white/[0.02] group"
+                        onDoubleClick={() => openFolder(f)}>
+                        <span className="text-2xl">📁</span>
+                        <span className="flex-1 text-sm text-slate-200 font-medium truncate">{f.name}</span>
+                        <span className="text-xs text-slate-600 hidden sm:block">{formatDate(f.createdAt)}</span>
+                        <button onClick={(e) => { e.stopPropagation(); deleteFolder(f); }}
+                          className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg hover:bg-red-500/10 text-red-400 text-xs transition">🗑️</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Files */}
+            {files.length > 0 && (
+              <div>
+                <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-4">📄 Fichiers</h2>
+                {viewMode === "grid" ? (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+                    {files.map((f) => (
+                      <div key={f.id}
+                        className="glass-card glass-card-hover rounded-2xl p-4 flex flex-col items-center text-center relative group cursor-pointer"
+                        onClick={() => setPreviewFile(f)}
+                      >
+                        <FileIcon mimeType={f.mimeType} size="lg" />
+                        <p className="text-sm font-medium text-slate-200 mt-2 truncate w-full" title={f.originalName}>{f.originalName}</p>
+                        <p className="text-[10px] text-slate-600 mt-1">{formatSize(f.size)}</p>
+                        {f.isPublic && <span className="text-[10px] text-green-400 mt-0.5">🔗 Partagé</span>}
+                        <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-all duration-200 flex gap-0.5">
+                          <button onClick={(e) => { e.stopPropagation(); downloadFile(f); }}
+                            className="p-1.5 rounded-lg bg-blue-500/10 hover:bg-blue-500/30 text-blue-400 text-xs transition" title="Télécharger">⬇</button>
+                          <button onClick={(e) => { e.stopPropagation(); toggleShare(f); }}
+                            className="p-1.5 rounded-lg bg-green-500/10 hover:bg-green-500/30 text-green-400 text-xs transition" title="Partager">🔗</button>
+                          <button onClick={(e) => { e.stopPropagation(); deleteFile(f); }}
+                            className="p-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/30 text-red-400 text-xs transition" title="Supprimer">🗑</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="glass-card rounded-2xl overflow-hidden">
+                    <div className="flex items-center px-4 py-2 text-[10px] uppercase tracking-wider text-slate-600 border-b border-white/[0.04]">
+                      <span className="flex-1">Nom</span>
+                      <span className="w-20 text-right hidden sm:block">Taille</span>
+                      <span className="w-36 text-right hidden md:block">Date</span>
+                      <span className="w-16 text-center hidden sm:block">Partage</span>
+                      <span className="w-24 text-right">Actions</span>
+                    </div>
+                    {files.map((f) => (
+                      <div key={f.id} className="table-row-nebula flex items-center px-4 py-3 gap-3 group cursor-pointer"
+                        onClick={() => setPreviewFile(f)}>
+                        <FileIcon mimeType={f.mimeType} size="sm" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm text-slate-200 font-medium truncate">{f.originalName}</p>
+                          <p className="text-[10px] text-slate-600 sm:hidden">{formatSize(f.size)}</p>
+                        </div>
+                        <span className="w-20 text-right text-xs text-slate-500 hidden sm:block">{formatSize(f.size)}</span>
+                        <span className="w-36 text-right text-xs text-slate-600 hidden md:block">{formatDate(f.createdAt)}</span>
+                        <span className="w-16 text-center hidden sm:block">
+                          {f.isPublic ? <span className="text-green-400 text-xs">🔗</span> : <span className="text-slate-600 text-xs">🔒</span>}
+                        </span>
+                        <div className="w-24 flex justify-end gap-0.5">
+                          <button onClick={(e) => { e.stopPropagation(); downloadFile(f); }}
+                            className="p-1.5 rounded-lg hover:bg-blue-500/10 text-blue-400 text-xs transition opacity-0 group-hover:opacity-100" title="Télécharger">⬇</button>
+                          <button onClick={(e) => { e.stopPropagation(); toggleShare(f); }}
+                            className="p-1.5 rounded-lg hover:bg-green-500/10 text-green-400 text-xs transition opacity-0 group-hover:opacity-100" title="Partager">🔗</button>
+                          <button onClick={(e) => { e.stopPropagation(); deleteFile(f); }}
+                            className="p-1.5 rounded-lg hover:bg-red-500/10 text-red-400 text-xs transition opacity-0 group-hover:opacity-100" title="Supprimer">🗑</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>
-        </div>
+        </main>
+      </div>
 
-        {/* Global Stats bar (floating bottom) */}
-        <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-3 px-6 py-3 rounded-2xl bg-white/5 backdrop-blur-2xl border border-white/10 shadow-2xl z-40">
-          <div className="flex items-center gap-2">
-            <Shield className="w-4 h-4 text-emerald-400" />
-            <span className="text-xs font-semibold text-gray-300">Connexion DB sécurisée</span>
+      {/* ── Modals ── */}
+      {showNewFolder && (
+        <Modal title="📁 Nouveau dossier" onClose={() => setShowNewFolder(false)}>
+          <input type="text" value={newFolderName} onChange={(e) => setNewFolderName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && createFolder()}
+            placeholder="Nom du dossier" autoFocus
+            className="input-nebula w-full px-4 py-3 rounded-xl text-sm text-white placeholder:text-slate-600 mb-4" />
+          <div className="flex gap-2 justify-end">
+            <button onClick={() => setShowNewFolder(false)} className="btn-secondary px-5 py-2.5 rounded-xl text-sm text-slate-300">Annuler</button>
+            <button onClick={createFolder} className="btn-primary px-5 py-2.5 rounded-xl text-sm text-white font-semibold">Créer</button>
           </div>
-          <div className="w-px h-4 bg-white/10" />
-          <div className="flex items-center gap-2">
-            <Cloud className="w-4 h-4 text-blue-400" />
-            <span className="text-xs font-semibold text-gray-300">Oracle Cloud Actif</span>
+        </Modal>
+      )}
+
+      {showShareModal && (
+        <Modal title="🔗 Lien de partage" onClose={() => setShowShareModal(null)}>
+          <p className="text-sm text-slate-400 mb-4">
+            Ce lien permet de télécharger <strong className="text-white">{showShareModal.originalName}</strong>
+          </p>
+          <div className="flex items-center gap-2 mb-4">
+            <input type="text" readOnly value={`${window.location.origin}/share/${showShareModal.shareToken}`}
+              className="input-nebula flex-1 px-4 py-2.5 rounded-xl text-xs text-slate-300" />
+            <button onClick={() => copyShareLink(showShareModal)}
+              className="btn-primary px-4 py-2.5 rounded-xl text-sm text-white font-semibold whitespace-nowrap">📋 Copier</button>
           </div>
-          <div className="w-px h-4 bg-white/10" />
-          <div className="flex items-center gap-2 cursor-pointer hover:text-white transition-colors text-gray-500" onClick={() => window.location.hash = "deploy"}>
-            <Info className="w-4 h-4" />
-            <span className="text-xs font-semibold">Docs</span>
+          <button onClick={() => setShowShareModal(null)}
+            className="btn-secondary w-full py-2.5 rounded-xl text-sm text-slate-300">Fermer</button>
+        </Modal>
+      )}
+
+      {previewFile && (
+        <Modal title="📋 Détails du fichier" onClose={() => setPreviewFile(null)}>
+          <div className="flex flex-col items-center mb-4">
+            <FileIcon mimeType={previewFile.mimeType} size="lg" />
+            <h3 className="text-white font-semibold mt-2 text-center break-all">{previewFile.originalName}</h3>
           </div>
-        </div>
-      </main>
+          <div className="space-y-2 text-sm">
+            {[
+              ["Type", previewFile.mimeType],
+              ["Taille", formatSize(previewFile.size)],
+              ["Date", formatDate(previewFile.createdAt)],
+              ["Téléchargements", String(previewFile.downloadCount)],
+              ["Statut", previewFile.isPublic ? "🌐 Public" : "🔒 Privé"],
+            ].map(([label, value]) => (
+              <div key={label} className="flex justify-between py-2 border-b border-white/[0.04]">
+                <span className="text-slate-500">{label}</span>
+                <span className="text-slate-200">{value}</span>
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-2 mt-4">
+            <button onClick={() => { downloadFile(previewFile); }}
+              className="btn-primary flex-1 py-2.5 rounded-xl text-sm text-white font-semibold">⬇️ Télécharger</button>
+            <button onClick={() => { toggleShare(previewFile); setPreviewFile(null); }}
+              className="btn-secondary flex-1 py-2.5 rounded-xl text-sm text-slate-300">
+              {previewFile.isPublic ? "🔒 Révoquer" : "🔗 Partager"}
+            </button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
